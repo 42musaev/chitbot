@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
     BOT_TOKEN: str
     DEBUG: bool = True
+    KICK_TIMEOUT: int = 30
 
 
 settings = Settings()
