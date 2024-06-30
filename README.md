@@ -34,7 +34,14 @@ poetry install
 python3 bot.py
 ```
 
-5. Run ruff and isort
+5. Install the git hook scripts
+
+```shell
+pre-commit install
+```
+
+6. Run ruff and isort
+
 ```shell
 pre-commit run --all-files
 ```
