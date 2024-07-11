@@ -41,6 +41,10 @@ fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
+[lint.isort]
+force-single-line = true
+
+
 [format]
 quote-style = "double"
 indent-style = "space"

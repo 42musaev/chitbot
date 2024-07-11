@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     BOT_TOKEN: str
     DEBUG: bool = True
     KICK_TIMEOUT: int = 30
+    CHATS: dict
+    TOPICS: dict
 
 
 settings = Settings()
