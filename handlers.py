@@ -36,7 +36,7 @@ class NewPost(StatesGroup):
 
 
 @router.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
-async def is_bot(chat_member_update: ChatMemberUpdated, bot: Bot) -> None:
+async def handle_new_member(chat_member_update: ChatMemberUpdated, bot: Bot) -> None:
     member = chat_member_update.new_chat_member.user
     chat_id = chat_member_update.chat.id
     member_id = member.id
@@ -44,7 +44,7 @@ async def is_bot(chat_member_update: ChatMemberUpdated, bot: Bot) -> None:
     if member and not member.is_bot:
         if member_id not in scheduled_users:
             scheduled_users.add(member_id)
-            kb = InlineKeyboardMarkup(
+            keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
@@ -56,16 +56,16 @@ async def is_bot(chat_member_update: ChatMemberUpdated, bot: Bot) -> None:
             message = await bot.send_message(
                 chat_id,
                 """Welcome to our group. Please click the "I'm not a bot" button to avoid getting kicked.""",
-                reply_markup=kb,
+                reply_markup=keyboard,
             )
             await asyncio.create_task(
-                kick_user(
+                schedule_user_kick(
                     bot, chat_id, member_id, message.message_id, settings.KICK_TIMEOUT
                 )
             )
 
 
-async def kick_user(
+async def schedule_user_kick(
     bot: Bot, chat_id: int, user_id: int, message_id: int, timeout: int
 ) -> None:
     await asyncio.sleep(timeout)
@@ -77,7 +77,7 @@ async def kick_user(
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("not_a_bot"))
-async def process_callback_not_a_bot(callback_query: CallbackQuery, bot: Bot) -> None:
+async def process_not_a_bot_callback(callback_query: CallbackQuery, bot: Bot) -> None:
     user_id = int(callback_query.data.split(",")[1])
     if callback_query.from_user.id == user_id:
         chat_id = callback_query.message.chat.id
@@ -88,24 +88,24 @@ async def process_callback_not_a_bot(callback_query: CallbackQuery, bot: Bot) ->
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def handle_start_command(message: Message):
     await message.answer(
         f"{message.from_user.first_name}, чем я могу тебе помочь?", reply_markup=kb.main
     )
 
 
 @router.message(F.text == "Написать пост")
-async def send_post_one(message: Message, state: FSMContext):
+async def initiate_post_creation(message: Message, state: FSMContext) -> None:
     await state.set_state(NewPost.text)
     await message.answer("Напишите содержание поста.", reply_markup=kb.contest_exit)
 
 
 @router.message(NewPost.text)
-async def send_post_two(message: Message, state: FSMContext):
+async def receive_post_content(message: Message, state: FSMContext) -> None:
     if message.text == "Отмена":
         await message.answer("Действие отменено!", reply_markup=ReplyKeyboardRemove())
         await state.clear()
-        await cmd_start(message)
+        await handle_start_command(message)
     else:
         if message.photo or message.text:
             if message.photo:
@@ -123,11 +123,11 @@ async def send_post_two(message: Message, state: FSMContext):
 
 
 @router.message(NewPost.topic)
-async def send_post_three(message: Message, state: FSMContext, bot: Bot):
+async def receive_post_topic(message: Message, state: FSMContext, bot: Bot) -> None:
     if message.text == "Отмена":
         await message.answer("Действие отменено!", reply_markup=ReplyKeyboardRemove())
         await state.clear()
-        await cmd_start(message)
+        await handle_start_command(message)
     else:
         if message.text in topics:
             await state.update_data(topic=message.text)
@@ -186,13 +186,13 @@ async def send_post_three(message: Message, state: FSMContext, bot: Bot):
 
             del likes_dislikes[sp_message_id]
             await state.clear()
-            await cmd_start(message)
+            await handle_start_command(message)
         else:
             await message.answer("Нет такого топика. Выбери из того, что я предлагаю.")
 
 
 @router.callback_query(lambda c: c.data in ["like", "dislike"])
-async def grade(callback_query: CallbackQuery, bot: Bot):
+async def handle_like_dislike(callback_query: CallbackQuery, bot: Bot) -> None:
     action = callback_query.data
     if action == "like":
         likes_dislikes[callback_query.message.message_id][0] += 1
