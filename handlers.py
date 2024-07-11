@@ -1,20 +1,38 @@
 import asyncio
 
 from aiogram import Bot
+from aiogram import F
 from aiogram import Router
 from aiogram.filters import IS_MEMBER
 from aiogram.filters import IS_NOT_MEMBER
 from aiogram.filters import ChatMemberUpdatedFilter
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State
+from aiogram.fsm.state import StatesGroup
 from aiogram.types import CallbackQuery
 from aiogram.types import ChatMemberUpdated
 from aiogram.types import InlineKeyboardButton
 from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import Message
+from aiogram.types import ReplyKeyboardRemove
 
+import keyboards as kb
 from config import settings
 
 router = Router()
 
 scheduled_users = set()
+
+chats = settings.CHATS
+topics = settings.TOPICS
+
+likes_dislikes = {}
+
+
+class NewPost(StatesGroup):
+    text = State()
+    topic = State()
 
 
 @router.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
@@ -67,3 +85,122 @@ async def process_callback_not_a_bot(callback_query: CallbackQuery, bot: Bot) ->
         if user_id in scheduled_users:
             scheduled_users.discard(user_id)
             await bot.delete_message(chat_id, message_id)
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message):
+    await message.answer(
+        f"{message.from_user.first_name}, чем я могу тебе помочь?", reply_markup=kb.main
+    )
+
+
+@router.message(F.text == "Написать пост")
+async def send_post_one(message: Message, state: FSMContext):
+    await state.set_state(NewPost.text)
+    await message.answer("Напишите содержание поста.", reply_markup=kb.contest_exit)
+
+
+@router.message(NewPost.text)
+async def send_post_two(message: Message, state: FSMContext):
+    if message.text == "Отмена":
+        await message.answer("Действие отменено!", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        await cmd_start(message)
+    else:
+        if message.photo or message.text:
+            if message.photo:
+                await state.update_data(photo=message.photo, caption=message.caption)
+            elif message.text:
+                await state.update_data(text=message.text)
+
+            await state.set_state(NewPost.topic)
+            await message.answer(
+                "Выберите топик, куда хотите закинуть пост.",
+                reply_markup=await kb.reply_topics(),
+            )
+        else:
+            await message.answer("Неверный формат. Только текст или фото.")
+
+
+@router.message(NewPost.topic)
+async def send_post_three(message: Message, state: FSMContext, bot: Bot):
+    if message.text == "Отмена":
+        await message.answer("Действие отменено!", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
+        await cmd_start(message)
+    else:
+        if message.text in topics:
+            await state.update_data(topic=message.text)
+            data = await state.get_data()
+            send_post = None
+            if "photo" in data:
+                send_post = await bot.send_photo(
+                    chat_id=chats["chitcom"],
+                    photo=data["photo"][-1].file_id,
+                    caption=data["caption"],
+                    message_thread_id=topics["ceo"],
+                    reply_markup=kb.like_dislike,
+                )
+            elif "text" in data:
+                send_post = await bot.send_message(
+                    chat_id=chats["chitcom"],
+                    text=data["text"],
+                    message_thread_id=topics["ceo"],
+                    reply_markup=kb.like_dislike,
+                )
+
+            sp_message_id = send_post.message_id
+            likes_dislikes[send_post.message_id] = [0, 0]
+            await message.answer(
+                "Пост принят и отправлен на проверку!",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await asyncio.sleep(10)
+            await bot.send_message(
+                chat_id=chats["chitcom"],
+                text="Время голосования за пост вышло",
+                message_thread_id=topics["ceo"],
+            )
+            if (
+                likes_dislikes[send_post.message_id][0]
+                >= likes_dislikes[send_post.message_id][1]
+            ):
+                await message.answer(
+                    f"Ваш пост одобрен и в скором времени окажется в топике {message.text}"
+                )
+                if "photo" in data:
+                    await bot.send_photo(
+                        chat_id=chats["chitcom"],
+                        photo=data["photo"][-1].file_id,
+                        caption=data["caption"],
+                        message_thread_id=topics[message.text],
+                    )
+                elif "text" in data:
+                    await bot.send_message(
+                        chat_id=chats["chitcom"],
+                        text=data["text"],
+                        message_thread_id=topics[message.text],
+                    )
+            else:
+                await message.answer("К сожалению, ваш пост не одобрили")
+
+            del likes_dislikes[sp_message_id]
+            await state.clear()
+            await cmd_start(message)
+        else:
+            await message.answer("Нет такого топика. Выбери из того, что я предлагаю.")
+
+
+@router.callback_query(lambda c: c.data in ["like", "dislike"])
+async def grade(callback_query: CallbackQuery, bot: Bot):
+    action = callback_query.data
+    if action == "like":
+        likes_dislikes[callback_query.message.message_id][0] += 1
+    else:
+        likes_dislikes[callback_query.message.message_id][1] += 1
+    await bot.edit_message_reply_markup(
+        chat_id=callback_query.message.chat.id,
+        message_id=callback_query.message.message_id,
+        reply_markup=None,
+    )
+    await callback_query.answer()
