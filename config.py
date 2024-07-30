@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     KICK_TIMEOUT: int = 30
     CHATS: dict
     TOPICS: dict
+    DATABASE_URL: str
 
 
 settings = Settings()

@@ -19,6 +19,10 @@ from aiogram.types import ReplyKeyboardRemove
 
 import keyboards as kb
 from config import settings
+from db.base_config import SessionLocal
+from db.repository import create_post
+from db.repository import get_post
+from db.repository import voting
 
 router = Router()
 
@@ -26,8 +30,6 @@ scheduled_users = set()
 
 chats = settings.CHATS
 topics = settings.TOPICS
-
-likes_dislikes = {}
 
 
 class NewPost(StatesGroup):
@@ -133,58 +135,74 @@ async def receive_post_topic(message: Message, state: FSMContext, bot: Bot) -> N
             await state.update_data(topic=message.text)
             data = await state.get_data()
             send_post = None
-            if "photo" in data:
-                send_post = await bot.send_photo(
-                    chat_id=chats["chitcom"],
-                    photo=data["photo"][-1].file_id,
-                    caption=data["caption"],
-                    message_thread_id=topics["ceo"],
-                    reply_markup=kb.like_dislike,
-                )
-            elif "text" in data:
-                send_post = await bot.send_message(
-                    chat_id=chats["chitcom"],
-                    text=data["text"],
-                    message_thread_id=topics["ceo"],
-                    reply_markup=kb.like_dislike,
-                )
+            async with SessionLocal() as session:
+                if "photo" in data:
+                    send_post = await bot.send_photo(
+                        chat_id=chats["chitcom"],
+                        photo=data["photo"][-1].file_id,
+                        caption=data["caption"],
+                        message_thread_id=topics["ceo"],
+                        reply_markup=kb.like_dislike,
+                    )
+                    await create_post(
+                        session,
+                        chat_id=str(send_post.chat.id),
+                        user_id=str(message.from_user.id),
+                        message_id=str(send_post.message_id),
+                        photo=data["photo"][-1].file_id,
+                        caption=data["caption"],
+                        group_topic=message.text,
+                    )
+                elif "text" in data:
+                    send_post = await bot.send_message(
+                        chat_id=chats["chitcom"],
+                        text=data["text"],
+                        message_thread_id=topics["ceo"],
+                        reply_markup=kb.like_dislike,
+                    )
+                    await create_post(
+                        session,
+                        chat_id=str(send_post.chat.id),
+                        user_id=str(message.from_user.id),
+                        message_id=str(send_post.message_id),
+                        text=data["text"],
+                        group_topic=message.text,
+                    )
 
-            sp_message_id = send_post.message_id
-            likes_dislikes[send_post.message_id] = [0, 0]
             await message.answer(
                 "Пост принят и отправлен на проверку!",
                 reply_markup=ReplyKeyboardRemove(),
             )
             await asyncio.sleep(10)
-            await bot.send_message(
-                chat_id=chats["chitcom"],
-                text="Время голосования за пост вышло",
-                message_thread_id=topics["ceo"],
-            )
-            if (
-                likes_dislikes[send_post.message_id][0]
-                >= likes_dislikes[send_post.message_id][1]
-            ):
-                await message.answer(
-                    f"Ваш пост одобрен и в скором времени окажется в топике {message.text}"
+            async with SessionLocal() as session:
+                db_post = await get_post(
+                    session,
+                    chat_id=str(send_post.chat.id),
+                    user_id=str(message.from_user.id),
+                    message_id=str(send_post.message_id),
                 )
-                if "photo" in data:
-                    await bot.send_photo(
-                        chat_id=chats["chitcom"],
-                        photo=data["photo"][-1].file_id,
-                        caption=data["caption"],
-                        message_thread_id=topics[message.text],
+                if db_post.assessment >= 0:
+                    db_post.approved = True
+                    await session.commit()
+                    await message.answer(
+                        f"Ваш пост одобрен и добавлен в топик {message.text}"
                     )
-                elif "text" in data:
-                    await bot.send_message(
-                        chat_id=chats["chitcom"],
-                        text=data["text"],
-                        message_thread_id=topics[message.text],
-                    )
-            else:
-                await message.answer("К сожалению, ваш пост не одобрили")
+                    if "photo" in data:
+                        await bot.send_photo(
+                            chat_id=chats["chitcom"],
+                            photo=data["photo"][-1].file_id,
+                            caption=data["caption"],
+                            message_thread_id=topics[message.text],
+                        )
+                    elif "text" in data:
+                        await bot.send_message(
+                            chat_id=chats["chitcom"],
+                            text=data["text"],
+                            message_thread_id=topics[message.text],
+                        )
+                else:
+                    await message.answer("К сожалению, ваш пост не одобрили")
 
-            del likes_dislikes[sp_message_id]
             await state.clear()
             await handle_start_command(message)
         else:
@@ -193,11 +211,22 @@ async def receive_post_topic(message: Message, state: FSMContext, bot: Bot) -> N
 
 @router.callback_query(lambda c: c.data in ["like", "dislike"])
 async def handle_like_dislike(callback_query: CallbackQuery, bot: Bot) -> None:
-    action = callback_query.data
-    if action == "like":
-        likes_dislikes[callback_query.message.message_id][0] += 1
-    else:
-        likes_dislikes[callback_query.message.message_id][1] += 1
+    async with SessionLocal() as session:
+        action = callback_query.data
+        vote = None
+        if action == "like":
+            vote = True
+        else:
+            vote = False
+
+        await voting(
+            session,
+            chat_id=str(callback_query.message.chat.id),
+            user_id=str(callback_query.from_user.id),
+            message_id=str(callback_query.message.message_id),
+            vote=vote,
+        )
+
     await bot.edit_message_reply_markup(
         chat_id=callback_query.message.chat.id,
         message_id=callback_query.message.message_id,

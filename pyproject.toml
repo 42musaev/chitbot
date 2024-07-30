@@ -12,6 +12,9 @@ aiogram = "^3.8.0"
 pydantic-settings = "^2.3.3"
 pre-commit = "^3.7.1"
 ruff = "^0.5.1"
+sqlalchemy = "^2.0.31"
+asyncpg = "^0.29.0"
+alembic = "^1.13.2"
 
 [build-system]
 requires = ["poetry-core"]
